@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { Product } from '../types';
 import { laravelProductService as menuService } from '../services/laravelProductService';
 import { formatPrice } from '../utils/currency';
-import { Plus, Edit2, Trash2, X, Save, Package, AlertTriangle } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Save, Package, AlertTriangle, Sparkles } from 'lucide-react';
+import laravelClient from '../services/laravelClient';
 
 interface ProductManagerProps {
     userId: string;
@@ -14,6 +15,11 @@ interface ProductManagerProps {
 export const ProductManager: React.FC<ProductManagerProps> = ({ userId, currency, onProductsChange }) => {
     const [products, setProducts] = useState<Product[]>([]);
     const [showModal, setShowModal] = useState(false);
+    const [showSmartPaste, setShowSmartPaste] = useState(false);
+    const [smartPasteText, setSmartPasteText] = useState('');
+    const [extracting, setExtracting] = useState(false);
+    const [extractedProducts, setExtractedProducts] = useState<any[]>([]);
+    const [selectedProducts, setSelectedProducts] = useState<Set<number>>(new Set());
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [productToDelete, setProductToDelete] = useState<Product | null>(null);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -90,18 +96,89 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ userId, currency
         onProductsChange?.();
     };
 
+    const handleSmartPaste = async () => {
+        if (!smartPasteText.trim()) return;
+
+        setExtracting(true);
+        try {
+            const response = await laravelClient.post('/products/extract', {
+                text: smartPasteText
+            });
+
+            if (response.data.success) {
+                const products = response.data.data;
+
+                if (products.length === 1) {
+                    // Single product - auto-fill form
+                    const product = products[0];
+                    setFormData({
+                        name: product.name,
+                        description: product.description,
+                        price: product.price.toString(),
+                        category: product.category,
+                        image: product.image // Use image from backend
+                    });
+                    setShowSmartPaste(false);
+                    setSmartPasteText('');
+                    setShowModal(true);
+                } else {
+                    // Multiple products - show selection UI
+                    setExtractedProducts(products);
+                    setSelectedProducts(new Set(products.map((_, idx) => idx)));
+                }
+            }
+        } catch (error) {
+            console.error('Smart paste failed:', error);
+            alert('Failed to extract product information. Please try again.');
+        } finally {
+            setExtracting(false);
+        }
+    };
+
+    const handleAddSelectedProducts = async () => {
+        const productsToAdd = Array.from(selectedProducts).map(idx => extractedProducts[idx]);
+
+        for (const product of productsToAdd) {
+            const productData = {
+                name: product.name,
+                description: product.description,
+                price: parseFloat(product.price),
+                currency: currency,
+                category: product.category,
+                image: product.image // Use image from backend
+            };
+            await menuService.addProduct(userId, productData);
+        }
+
+        await loadProducts();
+        onProductsChange?.();
+        setExtractedProducts([]);
+        setSelectedProducts(new Set());
+        setShowSmartPaste(false);
+        setSmartPasteText('');
+    };
+
     return (
         <div className="space-y-4">
             {/* Header - Mobile Optimized */}
             <div className="flex flex-col xs:flex-row justify-between items-start xs:items-center gap-3">
                 <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Products</h2>
-                <button
-                    onClick={handleAdd}
-                    className="w-full xs:w-auto px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg sm:rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all shadow-lg text-sm font-bold flex items-center justify-center gap-2"
-                >
-                    <Plus size={18} />
-                    <span>Add Product</span>
-                </button>
+                <div className="flex gap-2 w-full xs:w-auto">
+                    <button
+                        onClick={() => setShowSmartPaste(true)}
+                        className="flex-1 xs:flex-none px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg sm:rounded-xl hover:from-purple-700 hover:to-pink-700 transition-all shadow-lg text-sm font-bold flex items-center justify-center gap-2"
+                    >
+                        <Sparkles size={18} />
+                        <span>Smart Paste</span>
+                    </button>
+                    <button
+                        onClick={handleAdd}
+                        className="flex-1 xs:flex-none px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg sm:rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all shadow-lg text-sm font-bold flex items-center justify-center gap-2"
+                    >
+                        <Plus size={18} />
+                        <span>Add Product</span>
+                    </button>
+                </div>
             </div>
 
             {/* Products Grid - Mobile Responsive */}
@@ -144,6 +221,159 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ userId, currency
                             </div>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {/* Smart Paste Modal */}
+            {showSmartPaste && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+                        <div className="p-4 sm:p-6 border-b border-slate-100 flex justify-between items-center flex-shrink-0 bg-gradient-to-r from-purple-50 to-pink-50">
+                            <div>
+                                <h3 className="text-lg sm:text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    <Sparkles className="text-purple-600" size={24} />
+                                    AI Smart Paste
+                                </h3>
+                                <p className="text-xs text-slate-600 mt-1">Paste product info from anywhere - websites, WhatsApp, etc.</p>
+                            </div>
+                            <button onClick={() => setShowSmartPaste(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
+                            {extractedProducts.length === 0 ? (
+                                /* Paste textarea */
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-700 mb-2">
+                                        Paste your product information
+                                    </label>
+                                    <textarea
+                                        value={smartPasteText}
+                                        onChange={(e) => setSmartPasteText(e.target.value)}
+                                        className="w-full px-4 py-3 border-2 border-purple-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none resize-none text-sm transition-all"
+                                        rows={12}
+                                        placeholder="Example:
+
+iPhone 15 Pro Max - Latest flagship smartphone with A17 Pro chip and stunning titanium design. Advanced camera system. Price: ₦850,000
+
+Or:
+
+Fresh Jollof Rice Special
+Delicious Nigerian jollof rice with chicken and plantain
+$15 per plate"
+                                    />
+                                    <div className="mt-2 p-3 bg-purple-50 rounded-lg border border-purple-100">
+                                        <p className="text-xs text-purple-900 font-semibold mb-1">💡 Tips:</p>
+                                        <ul className="text-xs text-purple-700 space-y-1">
+                                            <li>• Include product name and description</li>
+                                            <li>• Add price with currency symbol (₦, $, €, £)</li>
+                                            <li>• Mention category if possible</li>
+                                            <li>• You can paste multiple products at once!</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : (
+                                /* Product selection UI */
+                                <div>
+                                    <div className="mb-3">
+                                        <p className="text-sm font-bold text-slate-700">
+                                            Found {extractedProducts.length} product{extractedProducts.length > 1 ? 's' : ''}! Select which ones to add:
+                                        </p>
+                                    </div>
+                                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                                        {extractedProducts.map((product, idx) => (
+                                            <div
+                                                key={idx}
+                                                className={`p-3 border-2 rounded-xl cursor-pointer transition-all ${selectedProducts.has(idx)
+                                                    ? 'border-purple-500 bg-purple-50'
+                                                    : 'border-slate-200 hover:border-purple-300'
+                                                    }`}
+                                                onClick={() => {
+                                                    const newSelected = new Set(selectedProducts);
+                                                    if (newSelected.has(idx)) {
+                                                        newSelected.delete(idx);
+                                                    } else {
+                                                        newSelected.add(idx);
+                                                    }
+                                                    setSelectedProducts(newSelected);
+                                                }}
+                                            >
+                                                <div className="flex items-start gap-3">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedProducts.has(idx)}
+                                                        onChange={() => { }}
+                                                        className="mt-1 w-4 h-4 text-purple-600 rounded"
+                                                    />
+                                                    <div className="flex-1">
+                                                        <h4 className="font-bold text-slate-800 text-sm">{product.name}</h4>
+                                                        <p className="text-xs text-slate-600 mt-1 line-clamp-2">{product.description}</p>
+                                                        <div className="flex items-center gap-3 mt-2">
+                                                            <span className="text-sm font-bold text-purple-600">
+                                                                {product.currency === 'NGN' && '₦'}
+                                                                {product.currency === 'USD' && '$'}
+                                                                {product.currency === 'EUR' && '€'}
+                                                                {product.currency === 'GBP' && '£'}
+                                                                {parseFloat(product.price).toLocaleString()}
+                                                            </span>
+                                                            <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
+                                                                {product.category}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex gap-3 p-4 sm:p-6 pt-0">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowSmartPaste(false);
+                                    setExtractedProducts([]);
+                                    setSelectedProducts(new Set());
+                                    setSmartPasteText('');
+                                }}
+                                className="flex-1 px-4 py-2.5 text-slate-600 font-semibold hover:bg-slate-100 rounded-xl transition-colors"
+                                disabled={extracting}
+                            >
+                                Cancel
+                            </button>
+                            {extractedProducts.length === 0 ? (
+                                <button
+                                    onClick={handleSmartPaste}
+                                    disabled={extracting || !smartPasteText.trim()}
+                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-xl hover:from-purple-700 hover:to-pink-700 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {extracting ? (
+                                        <>
+                                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                                            <span>Extracting...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Sparkles size={16} />
+                                            <span>Extract</span>
+                                        </>
+                                    )}
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleAddSelectedProducts}
+                                    disabled={selectedProducts.size === 0}
+                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-xl hover:from-purple-700 hover:to-pink-700 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <Plus size={16} />
+                                    <span>Add Selected ({selectedProducts.size})</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
                 </div>
             )}
 
